@@ -1,0 +1,223 @@
+---
+title: "GR5293 HW4"
+author: "Xueying Chi_xc2353"
+date: "11/13/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r read data}
+setwd("~/Desktop/GR5293 Project")
+housing <- read.csv("Housing New York by Building.csv")
+housing$Total.Units <- as.numeric(housing$Total.Units)
+housing$Counted.Rental.Units <- as.numeric(housing$Counted.Rental.Units)
+housing$Construction.Year <- substring(housing$Project.Start.Date, nchar(as.character(housing$Project.Start.Date)) - 1, nchar(as.character(housing$Project.Start.Date)))
+ 
+housing$Construction.Month <- substring(housing$Project.Start.Date, 1, 2)
+housing$Construction.Time <- paste(housing$Construction.Year,housing$Construction.Month, sep = "/")
+```
+
+
+# 1. How Good Are the Data?
+### a) Missing Values
+```{r missing patterns, warning = FALSE}
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(tibble)
+library(viridis)
+library(mi)
+library(extracat)
+
+
+tidyhousing <- housing %>% 
+  rownames_to_column("id") %>%
+  gather(key, value, -id) %>%
+  mutate(missing = ifelse(is.na(value), "1", "0")) # 1 stands for NA's,0 stands for real values
+
+
+ggplot(tidyhousing, aes(x = key, y = id, fill = missing)) +
+  geom_tile(color = "white") +
+  scale_fill_viridis(discrete = T) +
+  theme(axis.text.x = element_text(size = 5, angle = 70, hjust = 1), 
+        axis.text.y = element_text(size = 0),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks.y = element_blank())
+
+image(missing_data.frame(housing))
+
+visna(housing, sort = "b")
+
+
+```
+
+From ggplot we could observe that 15 variables have missing values, including 11 numerical variables, BBL(stands for a unique identifier for each tax lot in the city), BIN(stands for a unique identifier for each building in the city), Building ID, Census.Tract(the 2010 U.S.Census Tract where the building is located), Latitude, Latitude(Internal), Longtitude, Longtitude(Internal), Postcode, Number(i.e.House number) and Council.District, and 4 string variables, Project.Completion.Date, Building.Completion.Date, Neighborhood.Tabluation.Area, and Street. 
+
+There are 4 variables, BBL, BIN, Latitude(Internal), Longitude(Internal) have far more missing values than the others, which are more than half observations. Latitude(Internal) & Longitude(Internal) always have the same patterns and same numbers of missing values, same for Latitude & Longitude. This makes sense because they are usually paired to stand for the location on the earth's surface. The patterns of project completion date and building completion date are also the same because in fact they mean stands for the same. Missing patterns of building ID, street and house number are the same too because they usually appear together as an address. 
+
+The pattern of 12 missing values happens the most. The number of observations with no missing values are smaller than half observations, which is not desirable. 
+
+The variable BIN has the largest proportion of missing values and Concil District has the smallest. Plus, number of missing values of BIN is larger than that of postcode. 
+
+
+### b) Correlations
+
+```{r}
+bbl <- within(housing, borough <- 
+                reorder(Borough, BBL, function(x) sum(is.na(x))))
+fluctile(xtabs(is.na(BBL) ~ borough + Construction.Month, data = bbl))
+
+```
+
+
+```{r, eval = TRUE}
+library(tidyverse)
+library(viridis)
+```
+
+```{r, eval = TRUE}
+library(tidyverse)
+
+theme_dotplot <- theme_bw(16) +
+  theme(axis.ticks.y = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(size = 0.5),
+        panel.grid.minor.x = element_blank())
+
+```
+
+```{r}
+tidyhousing1 <- housing %>% 
+  select(Total.Units, Borough, BBL) %>%
+  mutate(missing = ifelse(is.na(BBL), "yes", "no"))
+
+
+na_by_borough <- tidyhousing1 %>% 
+  group_by(Total.Units, Borough) %>% 
+  summarize(count = sum(is.na(BBL))) %>% 
+  mutate(type = "Borough")
+
+mean_na_by_borough <- na_by_borough %>% 
+  group_by(Total.Units) %>%
+  summarize(count = mean(count)) %>% 
+  mutate(type = "Mean")
+
+combined_na <- bind_rows(na_by_borough, mean_na_by_borough)
+
+ggplot(combined_na, aes(x = count, 
+                        y = Total.Units, 
+                        color = type)) + geom_point() +
+  xlab("Number of missing values") +
+  theme_dotplot + 
+  theme(axis.text.y = element_text(size = rel(.5)))
+```
+
+
+
+
+
+
+### c) Impact of missing data
+The number of observations with no missing values are smaller than half of observations, so missing values do have influence on the analysis. If we delete all the missing values, number of observations would be significantly reduced. 
+
+Since there are some redundant variables in the data set, we could actually ignore or delete the variable, for example, BBL and building ID are unique identifiers for each building which do the same thing as the row names of each observation, we could delete the two variables and simply ignore the impact. Plus, in the dataset, there are two pairs of longitude and latitude, one of them is internal. Since the internal pair have more missing values, we could also delete these two. Because of the same meaning of postcode and NTA to represent for neigborhoods, and the missing values of postcode is more than those of NTA variable, we could also delete the postcode variable. Also, as mentioned before, the two variables of project completion date and bulding completion date have the same entries for all observations, we could delete building completion date. 
+
+However, if we remain the the project completion date variable and delete all rows containing NA values of it, there will only be left half of the observations, so this won't work. What we will do is that we will remain this variable and when we analyze the duration of each construction project on each building we will only use observations with real values. Same for census tract, NTA, and Council District. 
+
+Here, I would tell the readers that due to the limitation of the data, these results are from a subgroup of the orginal data. 
+
+
+
+# 2. Graphics for Time Series
+### a) Overall Trend
+
+In our datase, all numerical values stands for the properties of housing units and are fixed with respect to time. The only thing that's fluctuating is the number of units under construction. So we decide to explore the time series of number of housing units under consctruction with respect to time. 
+
+```{r time series, warning = FALSE}
+# construction time
+
+time <- as.data.frame(table(housing$Construction.Time))
+colnames(time) <- c("Time", "Count")
+
+g <- ggplot(data = time, aes(x = Time, y = Count, group = 1)) +
+  geom_line() +
+  theme(axis.text.x = element_text(angle = 70, hjust = 1))
+
+june <- time %>% filter(substr(Time, 4, 5) == "06")
+december <- time %>% filter(substr(Time, 4, 5) == "12")
+
+g + geom_point(data = june, aes(Time, Count), color = "slateblue") +
+  geom_text(data = june, aes(Time, Count + 20, label = "Jun."), color = "slateblue",              size = 3) + 
+  geom_point(data = december, aes(Time, Count), color = "salmon") +
+  geom_text(data = december, aes(Time, Count + 20, label = "Dec."), color = "salmon", 
+            size = 3) +
+    geom_smooth(color = "skyblue", se = FALSE)
+
+```
+
+The overall trend of number of housing units under construction are relatively stable except for the increasing peak values in June and decreasing peak values in December. In other months, the numbers are fluctuating but relatively stable, most are smaller than 50. There is one odd observation in October, 2015 that the number of consctruction units surges to more than 100.   
+
+
+### b) Subgroup Trend 
+
+```{r subgroupborough, warning = FALSE}
+borough <- as.data.frame(table(housing$Construction.Time, housing$Borough))
+colnames(borough) <- c("Time", "Borough", "Count")
+ggplot(data = borough, aes(x = Time, y = Count, color = Borough, group = Borough)) +
+  geom_line() +
+  theme(axis.text.x = element_text(angle = 70, hjust = 1)) 
+
+```
+
+We could tell that the trends of construction numbers in Queens and Staten Island are pretty stable, whereas those of Bronx, Brooklyn, and Manhattan increases and decreases drastically. Generally, the number of construction units in Brooklyn are higher than that of the others. 
+
+
+```{r facetborough, warning = FALSE}
+june1 <- borough %>% filter(substr(Time, 4, 5) == "06")
+december1 <- borough %>% filter(substr(Time, 4, 5) == "12")
+
+ggplot(data = borough, aes(x = Time, y = Count, group = 1)) +
+  geom_line() +
+  theme(axis.text.x = element_text(size = 3.8, angle = 70, hjust = 1)) + 
+  facet_wrap(~ Borough, scales = "free") + 
+  geom_point(data = june1, aes(Time, Count), color = "slateblue") +
+  geom_point(data = december1, aes(Time, Count), color = "salmon") +
+  geom_smooth(color = "skyblue", se = FALSE)
+
+```
+
+The trends for Bronx, Brooklyn, Manhattan basically follows the overall trends, but with more dramatic fluctuations, while the trends in Queens and Staten Island act differently. In Queens, the number of constructions had a dive in 2015. In Staten Island, the trend has been decreasing since the beginning of 2014 and become a little stable since September 2015. 
+
+
+### c) Cyclical Trend
+
+```{r cycle, warning = FALSE}
+cycle <- as.data.frame(table(housing$Construction.Time))
+colnames(cycle) <- c("Time", "Count")
+cycle$Year <- paste("20",substr(cycle$Time, 1, 2), sep = "")
+
+
+june2 <- cycle %>% filter(substr(Time, 4, 5) == "06")
+december2 <- cycle %>% filter(substr(Time, 4, 5) == "12")
+
+ggplot(data = cycle, aes(x = Time, y = Count, group = 1)) +
+  geom_line() +
+  theme(axis.text.x = element_text(size = 3.8, angle = 70, hjust = 1)) + 
+  facet_wrap(~ Year, scales = "free") + 
+  geom_point(data = june2, aes(Time, Count), color = "slateblue") +
+  geom_point(data = december2, aes(Time, Count), color = "salmon") +
+  geom_smooth(color = "skyblue", se = FALSE) 
+
+
+```
+
+From the plot, facet on year as a cycle, it is obvious that there are two peaks in each year, in June and December. The trends look like the Tilde symbol. Generally the peak values of June are larger than those of December. Plus the peaks of June are increasing while those of December are decreasing. 
+
+
+### d) Other Features
+
+In the plots, we notice there is one special observation in October 2015, which should have not been a peak in a single cycle. 
